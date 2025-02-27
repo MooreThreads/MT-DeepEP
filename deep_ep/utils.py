@@ -7,11 +7,11 @@ from deep_ep_cpp import Config, EventHandle
 
 class EventOverlap:
     """
-    A wrapper class to manage CUDA events, also for better overlapping convenience.
+    A wrapper class to manage MUSA events, also for better overlapping convenience.
 
     Attributes:
-        event: the CUDA event captured.
-        extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with CUDA graph.
+        event: the MUSA event captured.
+        extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with MUSA graph.
     """
 
     def __init__(self, event: Optional[EventHandle] = None,
@@ -20,18 +20,18 @@ class EventOverlap:
         Initialize the class.
 
         Arguments:
-            event: the CUDA event captured.
-            extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with CUDA graph.
+            event: the MUSA event captured.
+            extra_tensors: an easier way to simulate PyTorch tensor `record_stream`, may be useful with MUSA graph.
         """
         self.event = event
 
         # NOTES: we use extra tensors to achieve stream recording, otherwise,
-        # stream recording will be incompatible with CUDA graph.
+        # stream recording will be incompatible with MUSA graph.
         self.extra_tensors = extra_tensors
 
     def current_stream_wait(self) -> None:
         """
-        The current stream `torch.cuda.current_stream()` waits for the event to be finished.
+        The current stream `torch.musa.current_stream()` waits for the event to be finished.
         """
         assert self.event is not None
         self.event.current_stream_wait()

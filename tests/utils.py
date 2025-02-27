@@ -15,16 +15,16 @@ def init_dist(local_rank: int, num_local_ranks: int):
     assert (num_local_ranks < 8 and num_nodes == 1) or num_local_ranks == 8
 
     dist.init_process_group(
-        backend='nccl',
+        backend='mccl',
         init_method=f'tcp://{ip}:{port}',
         world_size=num_nodes * num_local_ranks,
         rank=node_rank * num_local_ranks + local_rank
     )
     torch.set_default_dtype(torch.bfloat16)
-    torch.set_default_device('cuda')
-    torch.cuda.set_device(local_rank)
+    torch.set_default_device('musa')
+    torch.musa.set_device(local_rank)
 
-    return dist.get_rank(), dist.get_world_size(), dist.new_group(list(range(num_local_ranks * num_nodes)))
+    return dist.get_rank(), dist.get_world_size(), dist.new_group(list(range(num_local_ranks * num_nodes)),backend="mccl")
 
 
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
@@ -73,8 +73,8 @@ def create_grouped_scores(scores: torch.Tensor, group_idx: torch.Tensor, num_gro
 
 def bench(fn, num_warmups: int = 20, num_tests: int = 30, post_fn=None):
     # Flush L2 cache with 256 MB data
-    torch.cuda.synchronize()
-    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='cuda')
+    torch.musa.synchronize()
+    cache = torch.empty(int(256e6 // 4), dtype=torch.int, device='musa')
 
     # Warmup
     for _ in range(num_warmups):
@@ -84,8 +84,8 @@ def bench(fn, num_warmups: int = 20, num_tests: int = 30, post_fn=None):
     cache.zero_()
 
     # Testing
-    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
-    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(num_tests)]
+    start_events = [torch.musa.Event(enable_timing=True) for _ in range(num_tests)]
+    end_events = [torch.musa.Event(enable_timing=True) for _ in range(num_tests)]
     for i in range(num_tests):
         # Record
         start_events[i].record()
@@ -93,7 +93,7 @@ def bench(fn, num_warmups: int = 20, num_tests: int = 30, post_fn=None):
         end_events[i].record()
         if post_fn is not None:
             post_fn()
-    torch.cuda.synchronize()
+    torch.musa.synchronize()
 
     times = np.array([s.elapsed_time(e) / 1e3 for s, e in zip(start_events, end_events)])[1:]
     return np.average(times), np.min(times), np.max(times)
@@ -148,14 +148,14 @@ def bench_kineto(fn, kernel_names, num_tests: int = 30, suppress_kineto_output: 
     suppress = suppress_stdout_stderr if suppress_kineto_output else empty_suppress
     with suppress():
         schedule = torch.profiler.schedule(wait=0, warmup=1, active=1, repeat=1)
-        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA], schedule=schedule) as prof:
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.MUSA], schedule=schedule) as prof:
             for i in range(2):
                 # NOTES: use a large kernel and a barrier to eliminate the unbalanced CPU launch overhead
                 if barrier_comm_profiling:
-                    lhs = torch.randn((8192, 8192), dtype=torch.float, device='cuda')
-                    rhs = torch.randn((8192, 8192), dtype=torch.float, device='cuda')
+                    lhs = torch.randn((8192, 8192), dtype=torch.float, device='musa')
+                    rhs = torch.randn((8192, 8192), dtype=torch.float, device='musa')
                     lhs @ rhs
-                    dist.all_reduce(torch.ones(1, dtype=torch.float, device='cuda'))
+                    dist.all_reduce(torch.ones(1, dtype=torch.float, device='musa'))
                 for _ in range(num_tests):
                     fn()
                 prof.step()
@@ -163,7 +163,7 @@ def bench_kineto(fn, kernel_names, num_tests: int = 30, suppress_kineto_output: 
     # Parse the profiling table
     assert isinstance(kernel_names, str) or isinstance(kernel_names, tuple)
     is_tupled = isinstance(kernel_names, tuple)
-    prof_lines = prof.key_averages().table(sort_by='cuda_time_total', max_name_column_width=100).split('\n')
+    prof_lines = prof.key_averages().table(sort_by='musa_time_total', max_name_column_width=100).split('\n')
     kernel_names = (kernel_names, ) if isinstance(kernel_names, str) else kernel_names
     assert all([isinstance(name, str) for name in kernel_names])
     for name in kernel_names:

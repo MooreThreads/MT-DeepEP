@@ -1,8 +1,8 @@
-#include "configs.cuh"
-#include "buffer.cuh"
-#include "exception.cuh"
-#include "launch.cuh"
-#include "utils.cuh"
+#include "configs.muh"
+#include "buffer.muh"
+#include "exception.muh"
+#include "launch.muh"
+#include "utils.muh"
 
 namespace deep_ep {
 
@@ -117,7 +117,7 @@ void notify_dispatch(const int* num_tokens_per_rank, int* moe_recv_counter_mappe
                      int num_tokens, const bool* is_token_in_rank, int* channel_prefix_matrix,
                      int* rank_prefix_matrix_copy, int num_memset_int, int expert_alignment,
                      void** buffer_ptrs, int **task_fifo_ptrs, int head, int rank,
-                     cudaStream_t stream, int num_channels) {
+                     musaStream_t stream, int num_channels) {
 #define NOTIFY_DISPATCH_LAUNCH_CASE(ranks) \
     LAUNCH_KERNEL(&cfg, notify_dispatch<ranks>, \
         num_tokens_per_rank, moe_recv_counter_mapped, \
@@ -140,38 +140,38 @@ template<int kNumRanks>
 __global__ void
 cached_notify_dispatch(const int* rank_prefix_matrix, int num_memset_int,
                        void** buffer_ptrs, int** task_fifo_ptrs, int head, int rank) {
-    // A simplified version for cached handles
-    barrier_device<kNumRanks>(task_fifo_ptrs, head, rank);
-    move_fifo_slots<kNumRanks>(head);
-    __syncthreads();
+//     // A simplified version for cached handles
+//     barrier_device<kNumRanks>(task_fifo_ptrs, head, rank);
+//     move_fifo_slots<kNumRanks>(head);
+//     __syncthreads();
 
-    // Copy and clean
-    auto thread_id = static_cast<int>(threadIdx.x), num_threads = static_cast<int>(blockDim.x);
-    auto ptr = reinterpret_cast<int*>(buffer_ptrs[rank]);
-    #pragma unroll
-    for (int i = thread_id; i < kNumRanks * kNumRanks; i += num_threads)
-        ptr[i] = rank_prefix_matrix[i];
-    #pragma unroll
-    for (int i = thread_id; i < num_memset_int; i += num_threads)
-        ptr[kNumRanks * kNumRanks + i] = 0;
-    memory_fence();
-    __syncthreads();
+//     // Copy and clean
+//     auto thread_id = static_cast<int>(threadIdx.x), num_threads = static_cast<int>(blockDim.x);
+//     auto ptr = reinterpret_cast<int*>(buffer_ptrs[rank]);
+//     #pragma unroll
+//     for (int i = thread_id; i < kNumRanks * kNumRanks; i += num_threads)
+//         ptr[i] = rank_prefix_matrix[i];
+//     #pragma unroll
+//     for (int i = thread_id; i < num_memset_int; i += num_threads)
+//         ptr[kNumRanks * kNumRanks + i] = 0;
+//     memory_fence();
+//     __syncthreads();
 
-    // Barrier after cleaning
-    barrier_device<kNumRanks>(task_fifo_ptrs, head, rank);
+//     // Barrier after cleaning
+//     barrier_device<kNumRanks>(task_fifo_ptrs, head, rank);
 }
 
 void cached_notify_dispatch(const int* rank_prefix_matrix, int num_memset_int,
                             void** buffer_ptrs, int** task_fifo_ptrs,
-                            int head, int rank, int num_ranks, cudaStream_t stream) {
-#define CACHED_NOTIFY_DISPATCH_LAUNCH_CASE(ranks) \
-    LAUNCH_KERNEL(&cfg, cached_notify_dispatch<ranks>, \
-        rank_prefix_matrix, num_memset_int, buffer_ptrs, task_fifo_ptrs, head, rank); \
-    break
+                            int head, int rank, int num_ranks, musaStream_t stream) {
+// #define CACHED_NOTIFY_DISPATCH_LAUNCH_CASE(ranks) \
+//     LAUNCH_KERNEL(&cfg, cached_notify_dispatch<ranks>, \
+//         rank_prefix_matrix, num_memset_int, buffer_ptrs, task_fifo_ptrs, head, rank); \
+//     break
 
-    SETUP_LAUNCH_CONFIG(1, 128, stream);
-    SWITCH_RANKS(CACHED_NOTIFY_DISPATCH_LAUNCH_CASE);
-#undef CACHED_NOTIFY_DISPATCH_LAUNCH_CASE
+//     SETUP_LAUNCH_CONFIG(1, 128, stream);
+//     SWITCH_RANKS(CACHED_NOTIFY_DISPATCH_LAUNCH_CASE);
+// #undef CACHED_NOTIFY_DISPATCH_LAUNCH_CASE
 }
 
 template<int kNumRanks>
@@ -425,7 +425,7 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx, int64_t* re
               const bool* is_token_in_rank, const int* channel_prefix_matrix,
               int num_tokens, int hidden_int4, int num_topk, int num_experts, int num_scales,
               void** buffer_ptrs, int rank, int num_ranks,
-              cudaStream_t stream, int num_sms, int num_max_send_tokens, int num_recv_buffer_tokens) {
+              musaStream_t stream, int num_sms, int num_max_send_tokens, int num_recv_buffer_tokens) {
 #define DISPATCH_LAUNCH_CASE(ranks) \
 LAUNCH_KERNEL(&cfg, dispatch<ranks>, \
     reinterpret_cast<int4*>(recv_x), recv_x_scales, recv_src_idx, recv_topk_idx, recv_topk_weights, recv_channel_offset, \
@@ -498,7 +498,7 @@ cached_notify_combine(void** buffer_ptrs, int* send_head, int num_channels, int 
 void cached_notify_combine(void** buffer_ptrs, int* send_head, int num_channels,
                            int num_recv_tokens, int num_memset_int,
                            int** task_fifo_ptrs, int head, int rank, int num_ranks,
-                           cudaStream_t stream) {
+                           musaStream_t stream) {
 #define CACHED_NOTIFY_COMBINE(ranks) \
     LAUNCH_KERNEL(&cfg, cached_notify_combine<ranks>, \
         buffer_ptrs, send_head, num_channels, num_recv_tokens, num_memset_int, task_fifo_ptrs, head, rank); \
@@ -613,7 +613,8 @@ combine(dtype_t* recv_x, float* recv_topk_weights,
             current_channel_tail_idx += num_round_tokens;
 
             // Move tail index
-            asm volatile("bar.sync %0, %1;" :: "r"(send_rank_id), "r"(num_threads_per_rank));
+            /*FIXME*/
+            // asm volatile("bar.sync %0, %1;" :: "r"(send_rank_id), "r"(num_threads_per_rank));
             if (send_lane_id == 0 and send_warp_id_in_rank == 0)
                 st_release_sys_global(channel_tail_idx.buffer(), current_channel_tail_idx);
         }
@@ -636,7 +637,8 @@ combine(dtype_t* recv_x, float* recv_topk_weights,
             warp_channel_head_idx[recv_warp_id][recv_lane_id] = 0;
         if (thread_id < kNumRanks)
             channel_tail_idx[thread_id] = 0;
-        asm volatile("bar.sync 0, %0;" :: "r"(kNumThreads));
+        /*FIXME*/
+        // asm volatile("bar.sync 0, %0;" :: "r"(kNumThreads));
 
         if (thread_id < 32) {
             int* channel_head_idx_ptr = reinterpret_cast<int*>(buffer_ptrs[rank]) + responsible_channel * kNumRanks + recv_lane_id;
@@ -768,13 +770,13 @@ combine(dtype_t* recv_x, float* recv_topk_weights,
     }
 }
 
-void combine(cudaDataType_t type,
+void combine(musaDataType_t type,
              void* recv_x, float* recv_topk_weights,
              const void* x, const float* topk_weights,
              const int* src_idx, const int* rank_prefix_matrix, const int* channel_prefix_matrix,
              int* send_head, int num_tokens, int num_recv_tokens, int hidden, int num_topk,
              void** buffer_ptrs, int rank, int num_ranks,
-             cudaStream_t stream, int num_sms,
+             musaStream_t stream, int num_sms,
              int num_max_send_tokens, int num_recv_buffer_tokens) {
     constexpr int kNumThreads = 768;
 

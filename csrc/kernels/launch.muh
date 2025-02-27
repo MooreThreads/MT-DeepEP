@@ -1,19 +1,19 @@
 #pragma once
 
-#include "configs.cuh"
+#include "configs.muh"
 
 #ifndef SETUP_LAUNCH_CONFIG
 #define SETUP_LAUNCH_CONFIG(num_sms, num_threads, stream) \
-    cudaLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream, nullptr, 0}; \
-    cudaLaunchAttribute attr[1]; \
-    attr[0].id = cudaLaunchAttributeCooperative; \
+    musaLaunchConfig_t cfg = {(num_sms), (num_threads), 0, stream, nullptr, 0}; \
+    musaLaunchAttribute attr[1]; \
+    attr[0].id = musaLaunchAttributeCooperative; \
     attr[0].val.cooperative = 1; \
     cfg.attrs = attr; \
-    cfg.numAttrs = 1
+    cfg.numAttrs = 0
 #endif
 
 #ifndef LAUNCH_KERNEL
-#define LAUNCH_KERNEL(config, kernel, ...) CUDA_CHECK(cudaLaunchKernelEx(config, kernel, ##__VA_ARGS__))
+#define LAUNCH_KERNEL(config, kernel, ...) MUSA_CHECK(musaLaunchKernelEx(config, kernel, ##__VA_ARGS__))
 #endif
 
 #define SWITCH_RANKS(case_macro) \
@@ -25,7 +25,7 @@
     } while (false)
 
 #define SWITCH_RDMA_RANKS(case_macro) \
-    switch (num_ranks / NUM_MAX_NVL_PEERS) { \
+    switch (num_ranks / NUM_MAX_MTL_PEERS) { \
         case 2: case_macro(2); \
         case 3: case_macro(3); \
         case 4: case_macro(4); \
@@ -46,8 +46,8 @@
 
 #define SWITCH_TYPES(case_macro) \
     switch (type) { \
-        case CUDA_R_16BF: case_macro(nv_bfloat16); \
-        case CUDA_R_32F:  case_macro(float); \
+        case MUSA_R_16BF: case_macro(mt_bfloat16); \
+        case MUSA_R_32F:  case_macro(float); \
         default: EP_HOST_ASSERT(false && "Unsupported type"); \
     } while (false)
 

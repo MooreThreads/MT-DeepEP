@@ -13,8 +13,8 @@
 
 #include "config.hpp"
 #include "event.hpp"
-#include "kernels/configs.cuh"
-#include "kernels/exception.cuh"
+#include "kernels/configs.muh"
+#include "kernels/exception.muh"
 
 #ifndef TORCH_EXTENSION_NAME
 #define TORCH_EXTENSION_NAME deep_ep_cpp
@@ -23,37 +23,35 @@
 namespace deep_ep {
 
 struct Buffer {
-    EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS == 8, "The number of maximum NVLink peers must be 8");
+    EP_STATIC_ASSERT(NUM_MAX_MTL_PEERS == 8, "The number of maximum MTLink peers must be 8");
 
 private:
     // Low-latency mode buffer
     int low_latency_buffer_idx = 0;
     bool low_latency_mode = false;
 
-    // NVLink Buffer
-    int64_t num_nvl_bytes;
-    void* buffer_ptrs[NUM_MAX_NVL_PEERS] = {nullptr};
+    // MTLink Buffer
+    int64_t num_mtl_bytes;
+    void* buffer_ptrs[NUM_MAX_MTL_PEERS] = {nullptr};
     void** buffer_ptrs_gpu = nullptr;
 
-    // NVSHMEM Buffer
     int64_t num_rdma_bytes;
     void* rdma_buffer_ptr = nullptr;
 
     // Device info and communication
     int device_id;
-    int rank, rdma_rank, nvl_rank;
-    int num_ranks, num_rdma_ranks, num_nvl_ranks;
-    cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS];
+    int rank, rdma_rank, mtl_rank;
+    int num_ranks, num_rdma_ranks, num_mtl_ranks;
+    musaIpcMemHandle_t ipc_handles[NUM_MAX_MTL_PEERS];
 
     // Stream for communication
-    at::cuda::CUDAStream comm_stream;
+    at::musa::MUSAStream comm_stream;
 
-    // After IPC/NVSHMEM synchronization, this flag will be true
     bool available = false;
 
     // Task fifo
     int head = 0;
-    int* task_fifo_ptrs[NUM_MAX_NVL_PEERS] = {nullptr};
+    int* task_fifo_ptrs[NUM_MAX_MTL_PEERS] = {nullptr};
     int** task_fifo_ptrs_gpu = nullptr;
 
     // Workspace
@@ -75,7 +73,7 @@ private:
     void move_fifo_slots(int num_slots = 1);
 
 public:
-    Buffer(int rank, int num_ranks, int64_t num_nvl_bytes, int64_t num_rdma_bytes, bool low_latency_mode);
+    Buffer(int rank, int num_ranks, int64_t num_mtl_bytes, int64_t num_rdma_bytes, bool low_latency_mode);
 
     ~Buffer() noexcept(false);
 
@@ -93,7 +91,7 @@ public:
 
     pybind11::bytearray get_local_ipc_handle() const;
 
-    pybind11::bytearray get_local_nvshmem_unique_id() const;
+    pybind11::bytearray get_local_mtshmem_unique_id() const;
 
     torch::Tensor get_local_buffer_tensor(const pybind11::object& dtype, int64_t offset, bool use_rdma_buffer) const;
 
@@ -129,7 +127,7 @@ public:
     internode_combine(const torch::Tensor& x, const std::optional<torch::Tensor>& topk_weights,
                       const torch::Tensor& src_meta, const torch::Tensor& is_combined_token_in_rank,
                       const torch::Tensor& rdma_channel_prefix_matrix, const torch::Tensor& rdma_rank_prefix_sum, const torch::Tensor& gbl_channel_prefix_matrix,
-                      const torch::Tensor& combined_rdma_head, const torch::Tensor& combined_nvl_head,
+                      const torch::Tensor& combined_rdma_head, const torch::Tensor& combined_mtl_head,
                       const Config& config, std::optional<EventHandle>& previous_event, bool async, bool allocate_on_comm_stream);
 
     void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank, int hidden, int num_experts);

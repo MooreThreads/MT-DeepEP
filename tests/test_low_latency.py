@@ -19,11 +19,11 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
     rank_offset = 128
     assert num_ranks - rank_offset < 257, 'Too many ranks (exceeding test precision limit)'
 
-    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='cuda') * (rank - rank_offset)
-    x[:, -128:] = torch.arange(num_tokens, device='cuda').to(torch.bfloat16).view(-1, 1)
-    scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='cuda').abs() + 1
+    x = torch.ones((num_tokens, hidden), dtype=torch.bfloat16, device='muda') * (rank - rank_offset)
+    x[:, -128:] = torch.arange(num_tokens, device='muda').to(torch.bfloat16).view(-1, 1)
+    scores = torch.randn((num_tokens, num_experts), dtype=torch.float32, device='muda').abs() + 1
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
-    topk_weights = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='cuda').abs()
+    topk_weights = torch.randn((num_tokens, num_topk), dtype=torch.float32, device='muda').abs()
 
     # Randomly mask some positions
     for i in range(10):
@@ -41,7 +41,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
             hook() if return_recv_hook else event.current_stream_wait()
         packed_recv_x = (packed_recv_x[0], packed_recv_x[1].contiguous())
         simulated_gemm_x = per_token_cast_back(packed_recv_x[0].view(-1, hidden), packed_recv_x[1].view(-1, hidden // 128)).view(packed_recv_x[0].shape)
-        all_topk_idx = torch.empty((num_ranks, num_tokens, num_topk), dtype=topk_idx.dtype, device='cuda')
+        all_topk_idx = torch.empty((num_ranks, num_tokens, num_topk), dtype=topk_idx.dtype, device='muda')
         dist.all_gather_into_tensor(all_topk_idx, topk_idx, group=group)
         for i in range(num_local_experts if do_check else 0):
             expert_id = rank * num_local_experts + i
@@ -78,7 +78,7 @@ def test_main(num_tokens: int, hidden: int, num_experts: int, num_topk: int,
             hash_value ^= hash_tensor(combined_x)
 
     def create_test_cast_with_outliers(num_outliers):
-        tmp = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='cuda')
+        tmp = torch.randn((num_tokens, hidden), dtype=torch.bfloat16, device='muda')
         tmp /= tmp.abs().amax(dim=1).view(-1, 1)
         assert tmp.abs().amax().item() <= 1
 

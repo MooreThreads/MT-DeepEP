@@ -13,7 +13,7 @@ from .utils import EventOverlap
 class Buffer:
     """
     The core expert-parallel (EP) communication buffers for Mixture of Experts (MoE) model, which supports:
-        - high-throughput intranode all-to-all (dispatch and combine, using NVLink)
+        - high-throughput intranode all-to-all (dispatch and combine, using MTLink)
         - high-throughput internode all-to-all (dispatch and combine, using RDMA without AR)
         - low-latency all-to-all (dispatch and combine, using RDMA, AR supported)
 
@@ -22,7 +22,7 @@ class Buffer:
         rank: the local rank number.
         group_size: the number of ranks in the group.
         group: the communication group.
-        num_nvl_bytes: the buffer size for intranode NVLink communication.
+        num_mtl_bytes: the buffer size for intranode MTLink communication.
         num_rdma_bytes: the buffer size for internode (also for intranode with low-latency mode) RDMA communication.
         runtime: the C++ runtime.
     """
@@ -30,14 +30,14 @@ class Buffer:
     num_sms: int = 20
 
     def __init__(self, group: dist.ProcessGroup,
-                 num_nvl_bytes: int = 0, num_rdma_bytes: int = 0,
+                 num_mtl_bytes: int = 0, num_rdma_bytes: int = 0,
                  low_latency_mode: bool = False, num_qps_per_rank: int = 1) -> None:
         """
         Initialize the communication buffer.
 
         Arguments:
             group: the communication group.
-            num_nvl_bytes: the buffer size for intranode NVLink communication.
+            num_mtl_bytes: the buffer size for intranode MTLink communication.
             num_rdma_bytes: the buffer size for internode (also for intranode with low-latency mode) RDMA communication.
             low_latency_mode: whether to enable low-latency mode.
             num_qps_per_rank: the number of QPs for RDMA, the low-latency mode requires that this number equals
@@ -49,10 +49,10 @@ class Buffer:
         self.rank = group.rank()
         self.group_size = group.size()
         self.group = group
-        self.num_nvl_bytes = num_nvl_bytes
+        self.num_mtl_bytes = num_mtl_bytes
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
-        self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_nvl_bytes, num_rdma_bytes, low_latency_mode)
+        self.runtime = deep_ep_cpp.Buffer(self.rank, self.group_size, num_mtl_bytes, num_rdma_bytes, low_latency_mode)
 
         # Synchronize device IDs
         device_ids = [None, ] * self.group_size
@@ -64,31 +64,31 @@ class Buffer:
         local_ipc_handle = self.runtime.get_local_ipc_handle()
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
-        # Synchronize NVSHMEM unique IDs
+        # Synchronize MTSHMEM unique IDs
         root_unique_id = None
         if self.runtime.get_num_rdma_ranks() > 1 or low_latency_mode:
-            # Enable IBGDA for the low latency mode, which refers to "no package forwarding between NVLink and RDMA"
+            # Enable IBGDA for the low latency mode, which refers to "no package forwarding between MTLink and RDMA"
             if low_latency_mode:
                 assert num_qps_per_rank > 0
-                os.environ['NVSHMEM_DISABLE_P2P'] = '1'
-                os.environ['NVSHMEM_IB_ENABLE_IBGDA'] = '1'
-                os.environ['NVSHMEM_IBGDA_NIC_HANDLER'] = 'gpu'
-                os.environ['NVSHMEM_IBGDA_NUM_RC_PER_PE'] = f'{num_qps_per_rank}'
+                os.environ['MTSHMEM_DISABLE_P2P'] = '1'
+                os.environ['MTSHMEM_IB_ENABLE_IBGDA'] = '1'
+                os.environ['MTSHMEM_IBGDA_NIC_HANDLER'] = 'gpu'
+                os.environ['MTSHMEM_IBGDA_NUM_RC_PER_PE'] = f'{num_qps_per_rank}'
                 # Make sure QP depth is always larger than the number of on-flight WRs, so that we can skip WQ slot check
-                os.environ['NVSHMEM_QP_DEPTH'] = '1024'
-                # NOTES: NVSHMEM initialization requires at least 256 MiB
-                os.environ['NVSHMEM_CUMEM_GRANULARITY'] = f'{2 ** 29}'
+                os.environ['MTSHMEM_QP_DEPTH'] = '1024'
+                # NOTES: MTSHMEM initialization requires at least 256 MiB
+                os.environ['MTSHMEM_CUMEM_GRANULARITY'] = f'{2 ** 29}'
 
             # Disable PCIe relaxed ordering to avoid out-of-order messages
-            os.environ['NVSHMEM_IB_ENABLE_RELAXED_ORDERING'] = '0'
+            os.environ['MTSHMEM_IB_ENABLE_RELAXED_ORDERING'] = '0'
 
             # NOTES: make sure AR (Adaptive Routing) is turned off while running normal kernels, as we cannot verify AR status in the code
             # Synchronize using the root ID
-            nvshmem_unique_ids = [None, ] * self.group_size
+            mtshmem_unique_ids = [None, ] * self.group_size
             if (low_latency_mode and self.rank == 0) or (not low_latency_mode and self.runtime.get_rdma_rank() == 0):
-                root_unique_id = self.runtime.get_local_nvshmem_unique_id()
-            dist.all_gather_object(nvshmem_unique_ids, root_unique_id, group)
-            root_unique_id = nvshmem_unique_ids[0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)]
+                root_unique_id = self.runtime.get_local_mtshmem_unique_id()
+            dist.all_gather_object(mtshmem_unique_ids, root_unique_id, group)
+            root_unique_id = mtshmem_unique_ids[0 if low_latency_mode else self.runtime.get_root_rdma_rank(True)]
 
         # Make CPP runtime available
         self.runtime.sync(device_ids, ipc_handles, root_unique_id)
@@ -109,7 +109,7 @@ class Buffer:
     @staticmethod
     def capture() -> EventOverlap:
         """
-        Capture a CUDA event on the current stream, i.e. `torch.cuda.current_stream()`.
+        Capture a MUSA event on the current stream, i.e. `torch.musa.current_stream()`.
 
         Returns:
             event: the captured event.
@@ -248,8 +248,8 @@ class Buffer:
                   Optional[torch.Tensor], List[int], Tuple, EventOverlap]:
         """
         Dispatch tokens to different ranks, both intranode and internode settings are supported.
-        Intranode kernels require all the ranks should be visible via NVLink.
-        Internode kernels require the ranks in a node should be visible via NVLink, while the ranks with the same GPU
+        Intranode kernels require all the ranks should be visible via MTLink.
+        Internode kernels require the ranks in a node should be visible via MTLink, while the ranks with the same GPU
             index should be visible via RDMA. AR must be disabled.
 
         Arguments:
@@ -320,8 +320,8 @@ class Buffer:
         """
         Combine (reduce) tokens (addition **without** weights) from different ranks, both intranode and internode
             settings are supported.
-        Intranode kernels require all the ranks should be visible via NVLink.
-        Internode kernels require the ranks in a node should be visible via NVLink, while the ranks with the same GPU
+        Intranode kernels require all the ranks should be visible via MTLink.
+        Internode kernels require the ranks in a node should be visible via MTLink, while the ranks with the same GPU
             index should be visible via RDMA. AR must be disabled.
 
         Arguments:
@@ -379,9 +379,9 @@ class Buffer:
             is_token_in_rank, \
                 rdma_channel_prefix_matrix, gbl_channel_prefix_matrix, \
                 recv_rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum, recv_gbl_channel_prefix_matrix, recv_gbl_rank_prefix_sum, \
-                recv_src_meta, send_rdma_head, send_nvl_head = handle
+                recv_src_meta, send_rdma_head, send_mtl_head = handle
             num_recv_tokens = recv_src_meta.size(0)
-            num_rdma_recv_tokens = send_nvl_head.size(0)
+            num_rdma_recv_tokens = send_mtl_head.size(0)
             recv_x, recv_x_scales, _, _, _, _, _, _, _, _, _, _, _, _, event = self.runtime.internode_dispatch(
                 x, x_scales, topk_idx, topk_weights,
                 None, None, is_token_in_rank, None,
@@ -395,7 +395,7 @@ class Buffer:
                 rdma_channel_prefix_matrix, gbl_channel_prefix_matrix, \
                 recv_rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum, \
                 recv_gbl_channel_prefix_matrix, recv_gbl_rank_prefix_sum, \
-                recv_src_meta, send_rdma_head, send_nvl_head, event = self.runtime.internode_dispatch(
+                recv_src_meta, send_rdma_head, send_mtl_head, event = self.runtime.internode_dispatch(
                 x, x_scales, topk_idx, topk_weights,
                 num_tokens_per_rank, num_tokens_per_rdma_rank, is_token_in_rank, num_tokens_per_expert,
                 0, 0, None, None, None, None,
@@ -403,7 +403,7 @@ class Buffer:
             handle = (is_token_in_rank,
                       rdma_channel_prefix_matrix, gbl_channel_prefix_matrix,
                       recv_rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum, recv_gbl_channel_prefix_matrix, recv_gbl_rank_prefix_sum,
-                      recv_src_meta, send_rdma_head, send_nvl_head)
+                      recv_src_meta, send_rdma_head, send_mtl_head)
             return (recv_x, recv_x_scales) if x_scales is not None else recv_x, recv_topk_idx, recv_topk_weights, num_recv_tokens_per_expert_list, handle, EventOverlap(event)
 
     # noinspection PyTypeChecker
@@ -423,14 +423,14 @@ class Buffer:
         is_combined_token_in_rank, \
             _, _, \
             rdma_channel_prefix_matrix, rdma_rank_prefix_sum, gbl_channel_prefix_matrix, gbl_rank_prefix_sum, \
-            src_meta, send_rdma_head, send_nvl_head = handle
+            src_meta, send_rdma_head, send_mtl_head = handle
 
         # Launch the kernel
         combined_x, combined_topk_weights, event = self.runtime.internode_combine(
             x, topk_weights,
             src_meta, is_combined_token_in_rank,
             rdma_channel_prefix_matrix, rdma_rank_prefix_sum, gbl_channel_prefix_matrix,
-            send_rdma_head, send_nvl_head, config, getattr(previous_event, 'event', None),
+            send_rdma_head, send_mtl_head, config, getattr(previous_event, 'event', None),
             async_finish, allocate_on_comm_stream)
         return combined_x, combined_topk_weights, EventOverlap(event)
 
@@ -457,7 +457,7 @@ class Buffer:
         A low-latency implementation for dispatching with IBGDA **with implicit FP8 casting**.
         This kernel requires all the ranks (no matter intranode or internode) should be visible via RDMA
             (specifically, IBGDA must be enabled).
-        Even for ranks in the same node, NVLink are fully disabled for simplicity.
+        Even for ranks in the same node, MTLink are fully disabled for simplicity.
         Warning: as there are only two buffers, and the returned tensors reuse the buffer, you can not hold more than 2
             low-latency kernels' result tensor at a single moment.
 
@@ -480,7 +480,7 @@ class Buffer:
                 `[num_local_experts, num_max_dispatch_tokens_per_rank * num_ranks, hidden // 128]` with `torch.float`.
                 Notice that, the last-two-dimension of the scaling tensors are in column-major for TMA compatibility.
                 Moreover, not all tokens are valid, only some of the `num_max_dispatch_tokens_per_rank * num_ranks` are,
-                as we do not synchronize CPU received count with GPU (also not incompatible with CUDA graph).
+                as we do not synchronize CPU received count with GPU (also not incompatible with MUSA graph).
             recv_count: a tensor shaped `[num_local_experts]` with type `torch.int`, indicating how many tokens each
                 expert receive. As mentioned before, all not tokens are valid in `recv_x`.
             handle: the communication handle to be used in the `low_latency_combine` function.
@@ -506,7 +506,7 @@ class Buffer:
         A low-latency implementation for combining tokens (reduce **with weights**) with IBGDA.
         This kernel requires all the ranks (no matter intranode or internode) should be visible via RDMA
             (specifically, IBGDA must be enabled).
-        Even for ranks in the same node, NVLink are fully disabled for simplicity.
+        Even for ranks in the same node, MTLink are fully disabled for simplicity.
         Warning: as there are only two buffers, and the returned tensors reuse the buffer, you can not hold more than 2
             low-latency kernels' result tensor at a single moment.
 

@@ -3,7 +3,7 @@
 #include <string>
 #include <exception>
 
-#include "configs.cuh"
+#include "configs.muh"
 
 #ifndef EP_STATIC_ASSERT
 #define EP_STATIC_ASSERT(cond, reason) static_assert(cond, reason)
@@ -21,12 +21,12 @@ public:
     const char *what() const noexcept override { return message.c_str(); }
 };
 
-#ifndef CUDA_CHECK
-#define CUDA_CHECK(cmd) \
+#ifndef MUSA_CHECK
+#define MUSA_CHECK(cmd) \
 do { \
-    cudaError_t e = (cmd); \
-    if (e != cudaSuccess) { \
-        throw EPException("CUDA", __FILE__, __LINE__, cudaGetErrorString(e)); \
+    musaError_t e = (cmd); \
+    if (e != musaSuccess) { \
+        throw EPException("MUSA", __FILE__, __LINE__, musaGetErrorString(e)); \
     } \
 } while (0)
 #endif
@@ -45,7 +45,6 @@ do { \
 do { \
     if (not (cond)) { \
         printf("Assertion failed: %s:%d, condition: %s\n", __FILE__, __LINE__, #cond); \
-        asm("trap;"); \
     } \
 } while (0)
 #endif

@@ -1,37 +1,46 @@
 import os
-import subprocess
+from pathlib import Path
 import setuptools
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+from torch_musa.utils.musa_extension import BuildExtension, MUSAExtension
 
 
 if __name__ == '__main__':
-    nvshmem_dir = os.getenv('NVSHMEM_DIR', None)
-    assert nvshmem_dir is not None and os.path.exists(nvshmem_dir), 'Failed to find NVSHMEM'
-    print(f'NVSHMEM directory: {nvshmem_dir}')
+    mtshmem_dir = os.getenv('MTSHMEM_DIR', None)
+    assert mtshmem_dir is not None and os.path.exists(mtshmem_dir), 'Failed to find MTSHMEM'
+    print(f'MTSHMEM directory: {mtshmem_dir}')
 
     # TODO: currently, we only support Hopper architecture, we may add Ampere support later
-    os.environ['TORCH_CUDA_ARCH_LIST'] = '9.0'
+    os.environ['TORCH_MUSA_ARCH_LIST'] = '9.0'
     cxx_flags = ['-O3', '-Wno-deprecated-declarations', '-Wno-unused-variable',
-                 '-Wno-sign-compare', '-Wno-reorder', '-Wno-attributes']
-    nvcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '--ptxas-options=--register-usage-level=10']
-    include_dirs = ['csrc/', f'{nvshmem_dir}/include']
-    sources = ['csrc/deep_ep.cpp',
-               'csrc/kernels/runtime.cu', 'csrc/kernels/intranode.cu',
-               'csrc/kernels/internode.cu', 'csrc/kernels/internode_ll.cu']
-    library_dirs = [f'{nvshmem_dir}/lib']
+                 '-Wno-sign-compare', '-Wno-reorder', '-Wno-attributes',
+                 '-march=native', 'force_mcc']
+    mtcc_flags = ['-O3', '-Xcompiler', '-O3', '-rdc=true', '-march=native']
 
-    # Disable aggressive PTX instructions
-    if int(os.getenv('DISABLE_AGGRESSIVE_PTX_INSTRS', '0')):
-        cxx_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
-        nvcc_flags.append('-DDISABLE_AGGRESSIVE_PTX_INSTRS')
+    import torch_musa
+    include_dirs = [
+        Path(torch_musa.__file__.split("__init__")[0] + "share/torch_musa_codegen"),
+        Path("/home/torch_musa"),
+        'csrc/',
+         f'{mtshmem_dir}/include',
+    ]
+    sources = ['csrc/deep_ep.cpp',
+               'csrc/kernels/runtime.mu', 'csrc/kernels/intranode.mu',
+               'csrc/kernels/internode.mu', 'csrc/kernels/internode_ll.mu']
+
+    library_dirs = [f'{mtshmem_dir}/lib']
+    # Disable aggressive MTX instructions
+    if int(os.getenv('DISABLE_AGGRESSIVE_MTX_INSTRS', '0')):
+        cxx_flags.append('-DDISABLE_AGGRESSIVE_MTX_INSTRS')
+        mtcc_flags.append('-DDISABLE_AGGRESSIVE_MTX_INSTRS')
 
     # Disable DLTO (default by PyTorch)
-    nvcc_dlink = ['-dlink', f'-L{nvshmem_dir}/lib', '-lnvshmem']
-    extra_link_args = ['-l:libnvshmem.a', '-l:nvshmem_bootstrap_uid.so', f'-Wl,-rpath,{nvshmem_dir}/lib']
+    mtcc_dlink = ['-dlink', f'-L{mtshmem_dir}/lib', '-lmtshmem']
+    extra_link_args = ['-l:libmtshmem.a', '-l:mtshmem_bootstrap_uid.so', f'-Wl,-rpath,{mtshmem_dir}/lib']
     extra_compile_args = {
         'cxx': cxx_flags,
-        'nvcc': nvcc_flags,
-        'nvcc_dlink': nvcc_dlink
+        'mtcc': mtcc_flags,
+        # disable device link
+        # 'mtcc_dlink': mtcc_dlink  
     }
 
     # noinspection PyBroadException
@@ -48,7 +57,7 @@ if __name__ == '__main__':
             include=['deep_ep']
         ),
         ext_modules=[
-            CUDAExtension(
+            MUSAExtension(
                 name='deep_ep_cpp',
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
